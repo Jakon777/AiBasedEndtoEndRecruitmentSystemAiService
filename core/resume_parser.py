@@ -1,15 +1,15 @@
 import pdfplumber
 import re
-import spacy
+# import spacy
 
-# nlp = spacy.load("en_core_web_sm")
-nlp = None  # Global variable
+# # nlp = spacy.load("en_core_web_sm")
+# nlp = None  # Global variable
 
-def get_nlp():
-    global nlp
-    if nlp is None:
-        nlp = spacy.load("en_core_web_sm")
-    return nlp
+# def get_nlp():
+#     global nlp
+#     if nlp is None:
+#         nlp = spacy.load("en_core_web_sm")
+#     return nlp
 
 COMMON_SKILLS = [
     "python","java","c++","react","node","mongodb",
