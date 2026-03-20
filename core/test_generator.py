@@ -1,13 +1,14 @@
 import json
 from core.llm_client import generate_text
 
-def generate_test(skills, difficulty="Intermediate"):
+def generate_test(skills, job_desc, difficulty="Intermediate"):
     prompt = f"""
 You are an AI technical interview generator.
 
 Generate questions based on:
 
 Skills: {skills}
+Job Description: {job_desc}
 Difficulty: {difficulty}
 
 Return ONLY valid JSON.
