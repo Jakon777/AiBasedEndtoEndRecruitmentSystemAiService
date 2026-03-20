@@ -1,19 +1,26 @@
 import os
 from dotenv import load_dotenv
 # import google.generativeai as genai
-from google import genai
+# from google import genai
+import google.generativeai as genai
 
 load_dotenv()
 
-API_KEY = os.getenv("GEMINI_API_KEY")
+_client = None
 
-if not API_KEY:
-    raise ValueError("GEMINI_API_KEY not found in environment variables")
 
-# genai.configure(api_key=API_KEY)
-client = genai.Client(api_key=API_KEY)
-
-# model = genai.GenerativeModel("gemini-2.5-flash")
+def _get_client():
+    global _client
+    if _client is not None:
+        return _client
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Add it to your environment or a .env file "
+            "in AI_HR-Services (see python-dotenv)."
+        )
+    _client = genai.Client(api_key=api_key)
+    return _client
 
 
 def generate_text(prompt: str) -> str:
@@ -23,7 +30,7 @@ def generate_text(prompt: str) -> str:
     """
 
     try:
-        # response = model.generate_content(prompt)
+        client = _get_client()
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt
