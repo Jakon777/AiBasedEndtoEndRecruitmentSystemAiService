@@ -1,45 +1,106 @@
 import os
+import warnings
+from pathlib import Path
+from typing import List, Optional
+
 from dotenv import load_dotenv
-# import google.generativeai as genai
-# from google import genai
+from google.api_core import exceptions as google_exceptions
 import google.generativeai as genai
 
-load_dotenv()
+# Deprecation noise on import; SDK still works until you migrate to google.genai
+warnings.filterwarnings(
+    "ignore",
+    message=".*google.generativeai.*",
+    category=FutureWarning,
+)
 
-_client = None
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+_configured = False
+
+# Tried when the preferred model hits 429 / free-tier quota (2.0-flash often shows limit: 0).
+_DEFAULT_MODEL_FALLBACKS: tuple[str, ...] = (
+    "gemini-1.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+)
+
+_last_ok_model: Optional[str] = None
 
 
-def _get_client():
-    global _client
-    if _client is not None:
-        return _client
+def _ensure_configured() -> None:
+    global _configured
+    if _configured:
+        return
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError(
             "GEMINI_API_KEY is not set. Add it to your environment or a .env file "
             "in AI_HR-Services (see python-dotenv)."
         )
-    _client = genai.Client(api_key=api_key)
-    return _client
+    genai.configure(api_key=api_key)
+    _configured = True
+
+
+def _model_candidates() -> List[str]:
+    """Ordered, de-duplicated model ids to try."""
+    seen = set()
+    out: List[str] = []
+
+    def add(mid: Optional[str]) -> None:
+        if mid and mid not in seen:
+            seen.add(mid)
+            out.append(mid)
+
+    global _last_ok_model
+    add(_last_ok_model)
+    add(os.getenv("GEMINI_MODEL", "").strip() or None)
+    for m in _DEFAULT_MODEL_FALLBACKS:
+        add(m)
+    return out
 
 
 def generate_text(prompt: str) -> str:
     """
     Sends prompt to Gemini and returns generated text.
-    Used by test generator service.
+    Tries multiple models if one hits free-tier quota (429 ResourceExhausted).
     """
+    _ensure_configured()
+    global _last_ok_model
 
-    try:
-        client = _get_client()
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
+    last_quota_error: Optional[BaseException] = None
+    candidates = _model_candidates()
 
-        if response.text:
-            return response.text
-        else:
+    for model_id in candidates:
+        try:
+            model = genai.GenerativeModel(model_id)
+            response = model.generate_content(prompt)
+            _last_ok_model = model_id
+
+            if response.text:
+                return response.text
             return "Model returned empty response."
 
-    except Exception as e:
-        raise RuntimeError(f"Gemini API error: {str(e)}")
+        except google_exceptions.ResourceExhausted as e:
+            last_quota_error = e
+            if model_id == _last_ok_model:
+                _last_ok_model = None
+            continue
+
+        except google_exceptions.NotFound:
+            # Wrong model id for this API version / key — try next
+            continue
+
+    if last_quota_error is not None:
+        raise RuntimeError(
+            "Gemini API: free-tier quota exhausted for every model tried "
+            f"({', '.join(candidates)}). Wait and retry, use another API key, "
+            "enable billing, or set GEMINI_MODEL to a model your project supports. "
+            f"Details: {last_quota_error}"
+        ) from last_quota_error
+
+    raise RuntimeError(
+        "Gemini API: no model could handle the request. "
+        "Set GEMINI_MODEL to a valid model id for your API key."
+    )

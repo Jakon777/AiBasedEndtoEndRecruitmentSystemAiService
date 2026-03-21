@@ -299,7 +299,7 @@ def extract_skills(text):
     return out
 
 
-def parse_resume(path):
+def parse_resume(path, include_full_text: bool = False):
 
     text = extract_text_from_pdf(path)
 
@@ -308,10 +308,13 @@ def parse_resume(path):
     skills = extract_skills(text)
     phone = extract_phone(text)
 
-    return {
+    out = {
         "name": name,
         "email": emails,
         "phone": phone,
         "skills": skills,
         "text_preview": text[:500],
     }
+    if include_full_text:
+        out["full_text"] = text
+    return out
