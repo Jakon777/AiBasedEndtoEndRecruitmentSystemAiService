@@ -1,7 +1,11 @@
+import logging
 import re
+import time
 from typing import Any, Dict, List, Tuple
 
 from core.embedding_engine import compute_similarity
+
+log = logging.getLogger("ai_hr.shortlist")
 
 # Weight semantic fit vs explicit skill overlap (0–1 each, then scaled to score 0–100)
 _SIMILARITY_WEIGHT = 0.5
@@ -70,14 +74,18 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
 
     # Don't keep the full (potentially huge) resume text in memory.
     # We only need a bounded slice for embeddings.
+    t0 = time.perf_counter()
     parsed = parse_resume(resume_path, include_full_text=False)
+    t1 = time.perf_counter()
     resume_text = (parsed.get("text_for_similarity") or parsed.get("text_preview") or "").strip()
+    t_resume_chars = len(resume_text)
     candidate_skills: List[str] = list(parsed.get("skills") or [])
 
     job_text = build_job_text(job).strip()
     # Cap job text too; embedding tokenization can otherwise spike memory for
     # very large descriptions.
-    job_text = job_text[:4000] if job_text else job_text
+    job_text = job_text[:2500] if job_text else job_text
+    t_job_chars = len(job_text)
     required = [str(s) for s in (job.get("skillsRequired") or [])]
 
     if not resume_text:
@@ -92,8 +100,16 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
             "reason": "No text could be extracted from the resume PDF.",
         }
 
+    log.info(
+        "shortlist/evaluate | resume_chars=%s job_chars=%s parsed_ms=%.1f",
+        t_resume_chars,
+        t_job_chars,
+        (t1 - t0) * 1000.0,
+    )
+
     sim_raw = compute_similarity(job_text, resume_text) if job_text else 0.0
     similarity = max(0.0, min(1.0, float(sim_raw)))
+    log.info("shortlist/evaluate | similarity=%.4f", similarity)
 
     skill_ratio, matched_skills, missing_skills = _skills_overlap(
         required, candidate_skills
