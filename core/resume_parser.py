@@ -347,4 +347,4 @@ def parse_resume(
     if include_full_text:
         # Note: still capped by `max_chars` above.
         out["full_text"] = text
-    return out
+    return out  

@@ -101,4 +101,4 @@ def compute_similarity(text1: str, text2: str):
 
     score = cosine_similarity([emb1], [emb2])[0][0]
 
-    return float(score)
+    return float(score)  

@@ -117,3 +117,4 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
         "missingSkills": missing_skills,
         "candidateName": parsed.get("name") or "",
     }
+ 
