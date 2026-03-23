@@ -60,6 +60,8 @@
 
 
 
+import os
+
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -69,8 +71,10 @@ _model: SentenceTransformer | None = None
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
+        # Default to a smaller model to reduce RAM on tight hosts.
+        embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L3-v2").strip()
         # Force CPU to keep memory predictable on small hosts.
-        _model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        _model = SentenceTransformer(embedding_model, device="cpu")
         # SentenceTransformer defaults are typically fine, but capping helps
         # keep tokenization / attention work bounded.
         if hasattr(_model, "max_seq_length") and _model.max_seq_length:

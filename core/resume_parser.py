@@ -153,7 +153,7 @@ import pdfplumber
 import re
 
 
-def extract_text_from_pdf(path: str, max_chars: int = 12000) -> str:
+def extract_text_from_pdf(path: str, max_chars: int = 8000) -> str:
     """
     Extract text from a PDF while capping total characters.
 
@@ -324,9 +324,9 @@ def parse_resume(
     path: str,
     include_full_text: bool = False,
     *,
-    max_chars: int = 12000,
+    max_chars: int = 8000,
     text_preview_chars: int = 500,
-    similarity_chars: int = 4000,
+    similarity_chars: int = 2000,
 ):
     text = extract_text_from_pdf(path, max_chars=max_chars)
 
