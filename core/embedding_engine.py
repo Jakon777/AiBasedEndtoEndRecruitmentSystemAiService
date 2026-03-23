@@ -62,7 +62,7 @@
 
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-
+ # TODO: use GPU for faster computation
 _model: SentenceTransformer | None = None
 
 
