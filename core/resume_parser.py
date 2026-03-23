@@ -153,16 +153,37 @@ import pdfplumber
 import re
 
 
-def extract_text_from_pdf(path):
-    text = ""
+def extract_text_from_pdf(path: str, max_chars: int = 12000) -> str:
+    """
+    Extract text from a PDF while capping total characters.
+
+    This prevents large resumes from pushing the app over tight memory limits
+    (e.g. Render 512MB) during embedding.
+    """
+    chunks: list[str] = []
+    total = 0
 
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
+            if total >= max_chars:
+                break
 
-    return text
+            page_text = page.extract_text() or ""
+            if not page_text:
+                continue
+
+            remaining = max_chars - total
+            if remaining <= 0:
+                break
+
+            # Bound per-page contribution to avoid building huge strings.
+            if len(page_text) > remaining:
+                page_text = page_text[:remaining]
+
+            chunks.append(page_text + "\n")
+            total += len(page_text)
+
+    return "".join(chunks)
 
 
 def extract_email(text):
@@ -299,22 +320,31 @@ def extract_skills(text):
     return out
 
 
-def parse_resume(path, include_full_text: bool = False):
-
-    text = extract_text_from_pdf(path)
+def parse_resume(
+    path: str,
+    include_full_text: bool = False,
+    *,
+    max_chars: int = 12000,
+    text_preview_chars: int = 500,
+    similarity_chars: int = 4000,
+):
+    text = extract_text_from_pdf(path, max_chars=max_chars)
 
     name = extract_name(text)
     emails = extract_email(text)
     skills = extract_skills(text)
     phone = extract_phone(text)
 
-    out = {
+    out: dict[str, object] = {
         "name": name,
         "email": emails,
         "phone": phone,
         "skills": skills,
-        "text_preview": text[:500],
+        "text_preview": text[:text_preview_chars],
+        # Use a bounded text slice for embeddings / similarity.
+        "text_for_similarity": text[:similarity_chars],
     }
     if include_full_text:
+        # Note: still capped by `max_chars` above.
         out["full_text"] = text
     return out

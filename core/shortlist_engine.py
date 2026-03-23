@@ -68,11 +68,16 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
     """
     from core.resume_parser import parse_resume
 
-    parsed = parse_resume(resume_path, include_full_text=True)
-    resume_text = (parsed.get("full_text") or "").strip()
+    # Don't keep the full (potentially huge) resume text in memory.
+    # We only need a bounded slice for embeddings.
+    parsed = parse_resume(resume_path, include_full_text=False)
+    resume_text = (parsed.get("text_for_similarity") or parsed.get("text_preview") or "").strip()
     candidate_skills: List[str] = list(parsed.get("skills") or [])
 
     job_text = build_job_text(job).strip()
+    # Cap job text too; embedding tokenization can otherwise spike memory for
+    # very large descriptions.
+    job_text = job_text[:4000] if job_text else job_text
     required = [str(s) for s in (job.get("skillsRequired") or [])]
 
     if not resume_text:
