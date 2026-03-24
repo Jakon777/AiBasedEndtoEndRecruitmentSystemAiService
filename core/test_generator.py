@@ -27,20 +27,11 @@ JSON schema:
       "options": ["A","B","C","D"],
       "correct_answer": "A"
     }}
-  ],
-  
-  "coding_questions": [
-    {{
-      "title": "string",
-      "description": "string",
-      "sample_input": "string",
-      "sample_output": "string"
-    }}
   ]
-}}
+    }}
 
 Requirements:
-- Generate exactly 5 MCQs
+- Generate exactly 30 MCQs
 """
 # - Generate exactly 2 coding questions
 
