@@ -40,6 +40,71 @@ UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
+def _save_upload_temp(resume: UploadFile) -> str:
+    """Write upload to a temp file; caller must delete the path when done."""
+    suffix = Path(resume.filename or "").suffix or ".pdf"
+    safe_name = f"{uuid.uuid4().hex}{suffix}"
+    path = os.path.join(UPLOAD_FOLDER, safe_name)
+    with open(path, "wb") as buffer:
+        shutil.copyfileobj(resume.file, buffer)
+    return path
+
+
+def _remove_file_quiet(path: str) -> None:
+    if path and os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _evaluate_shortlist_safe(job_payload: dict[str, Any], path: str) -> dict[str, Any]:
+    """Run shortlist evaluation; never raises — callers batching many resumes rely on this."""
+    try:
+        out = dict(evaluate_shortlist(job_payload, path))
+        out["ok"] = True
+        return out
+    except Exception as e:
+        required = [str(s) for s in (job_payload.get("skillsRequired") or [])]
+        return {
+            "ok": False,
+            "error": str(e),
+            "shortlisted": False,
+            "score": 0.0,
+            "similarity": 0.0,
+            "skillsMatchRatio": 0.0,
+            "matchedSkills": [],
+            "missingSkills": required,
+            "candidateName": "",
+            "reason": f"Evaluation failed: {e}",
+        }
+
+
+def _ats_for_path(path: str) -> dict[str, Any]:
+    """Parse resume and compute ATS score + feedback; never raises."""
+    try:
+        parsed = parse_resume(path, include_full_text=True)
+        full_text = str(parsed.get("full_text") or "")
+        ats_score_value = _compute_ats_score_from_resume_text(parsed, full_text)
+        feedback = _build_ats_feedback(parsed, full_text, ats_score_value)
+        return {
+            "ok": True,
+            "atsScore": int(ats_score_value),
+            "feedback": feedback,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "atsScore": 0,
+            "feedback": {
+                "level": "needs_improvement",
+                "strengths": [],
+                "improvementAreas": ["Could not read this resume file reliably."],
+                "error": str(e),
+            },
+        }
+
+
 def _compute_ats_score_from_resume_text(parsed: dict[str, Any], full_text: str) -> int:
     """
     Compute a basic ATS-style integer score (0-100) from resume quality signals.
@@ -93,7 +158,11 @@ def _build_ats_feedback(parsed: dict[str, Any], full_text: str, ats_score: int) 
     """
     text = (full_text or "").strip()
     skills = parsed.get("skills") or []
+    if not isinstance(skills, list):
+        skills = []
     emails = parsed.get("email") or []
+    if not isinstance(emails, list):
+        emails = []
     phone = (parsed.get("phone") or "").strip()
     name = (parsed.get("name") or "").strip()
 
@@ -157,31 +226,73 @@ def _build_ats_feedback(parsed: dict[str, Any], full_text: str, ats_score: int) 
 async def ats_score(resume: UploadFile = File(..., description="Candidate resume PDF")):
     """
     Upload a resume and return an ATS-like integer score.
+    Always returns 200; check `ok` for per-file success (parsing errors do not raise).
     """
-    suffix = Path(resume.filename or "").suffix or ".pdf"
-    safe_name = f"{uuid.uuid4().hex}{suffix}"
-    path = os.path.join(UPLOAD_FOLDER, safe_name)
-
+    path = _save_upload_temp(resume)
     try:
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(resume.file, buffer)
-
-        parsed = parse_resume(path, include_full_text=True)
-        full_text = str(parsed.get("full_text") or "")
-        ats_score_value = _compute_ats_score_from_resume_text(parsed, full_text)
-        feedback = _build_ats_feedback(parsed, full_text, ats_score_value)
-        return {
-            "atsScore": int(ats_score_value),
-            "feedback": feedback,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse resume: {e}") from e
+        return _ats_for_path(path)
     finally:
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        _remove_file_quiet(path)
+
+
+@router.post("/ats-score-batch")
+async def ats_score_batch(
+    resumes: list[UploadFile] = File(
+        ...,
+        description="One or more resume PDFs; each is scored independently.",
+    ),
+):
+    """
+    Score many resumes in one request. Failures on one file do not stop the rest.
+    """
+    if not resumes:
+        raise HTTPException(status_code=400, detail="Provide at least one resume file.")
+
+    results: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+
+    for i, resume in enumerate(resumes):
+        path = ""
+        try:
+            path = _save_upload_temp(resume)
+            item = _ats_for_path(path)
+            if item.get("ok"):
+                succeeded += 1
+            else:
+                failed += 1
+            results.append(
+                {
+                    "index": i,
+                    "fileName": resume.filename or "",
+                    **item,
+                }
+            )
+        except Exception as e:
+            failed += 1
+            results.append(
+                {
+                    "index": i,
+                    "fileName": resume.filename or "",
+                    "ok": False,
+                    "atsScore": 0,
+                    "feedback": {
+                        "level": "needs_improvement",
+                        "strengths": [],
+                        "improvementAreas": [],
+                        "error": str(e),
+                    },
+                }
+            )
+        finally:
+            _remove_file_quiet(path)
+
+    return {
+        "total": len(resumes),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+    }
 
 
 @router.post("/evaluate")
@@ -195,6 +306,7 @@ async def shortlist_candidate(
     """
     Upload a resume PDF plus job posting metadata; returns whether the candidate
     is shortlisted (boolean) and supporting scores.
+    Check `ok`; if False, `error` explains the failure without aborting client batch flows.
     """
     try:
         raw = json.loads(job)
@@ -211,19 +323,93 @@ async def shortlist_candidate(
 
     job_payload = job_model.model_dump()
 
-    suffix = Path(resume.filename or "").suffix or ".pdf"
-    safe_name = f"{uuid.uuid4().hex}{suffix}"
-    path = os.path.join(UPLOAD_FOLDER, safe_name)
+    path = _save_upload_temp(resume)
+    try:
+        return _evaluate_shortlist_safe(job_payload, path)
+    finally:
+        _remove_file_quiet(path)
+
+
+@router.post("/evaluate-batch")
+async def shortlist_batch(
+    job: str = Form(
+        ...,
+        description='Job posting JSON, e.g. {"title":"...","description":"...","skillsRequired":["Java"]}',
+    ),
+    resumes: list[UploadFile] = File(
+        ...,
+        description="One or more resume PDFs; each is evaluated independently against the same job.",
+    ),
+):
+    """
+    Evaluate many applications for one job in one request.
+    A corrupt or unreadable resume does not stop scoring for the others.
+    """
+    if not resumes:
+        raise HTTPException(status_code=400, detail="Provide at least one resume file.")
 
     try:
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(resume.file, buffer)
+        raw = json.loads(job)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid job JSON: {e}") from e
 
-        result = evaluate_shortlist(job_payload, path)
-        return result
-    finally:
-        if os.path.isfile(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="job must be a JSON object")
+
+    try:
+        job_model = JobPostingPayload.model_validate(raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid job payload: {e}") from e
+
+    job_payload = job_model.model_dump()
+
+    results: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+
+    for i, resume in enumerate(resumes):
+        path = ""
+        try:
+            path = _save_upload_temp(resume)
+            data = _evaluate_shortlist_safe(job_payload, path)
+            if data.get("ok"):
+                succeeded += 1
+            else:
+                failed += 1
+            results.append(
+                {
+                    "index": i,
+                    "fileName": resume.filename or "",
+                    "result": data,
+                }
+            )
+        except Exception as e:
+            failed += 1
+            required = [str(s) for s in (job_payload.get("skillsRequired") or [])]
+            results.append(
+                {
+                    "index": i,
+                    "fileName": resume.filename or "",
+                    "result": {
+                        "ok": False,
+                        "error": str(e),
+                        "shortlisted": False,
+                        "score": 0.0,
+                        "similarity": 0.0,
+                        "skillsMatchRatio": 0.0,
+                        "matchedSkills": [],
+                        "missingSkills": required,
+                        "candidateName": "",
+                        "reason": f"Evaluation failed: {e}",
+                    },
+                }
+            )
+        finally:
+            _remove_file_quiet(path)
+
+    return {
+        "total": len(resumes),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+    }
