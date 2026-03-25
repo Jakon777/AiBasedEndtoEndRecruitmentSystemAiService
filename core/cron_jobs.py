@@ -1,8 +1,8 @@
 import asyncio
 import logging
+import os
 from typing import Optional
 
-# ✅ Logging Configuration (IMPORTANT)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -10,23 +10,17 @@ logging.basicConfig(
 
 log = logging.getLogger("ai_hr.cron")
 
-# 14 minutes in seconds
-CRON_INTERVAL_SECONDS = 14 * 60
+# ✅ Read from environment (default = 14 minutes)
+CRON_INTERVAL_SECONDS = int(os.getenv("CRON_INTERVAL_SECONDS", 14 * 60))
 
 
 def run_scheduled_job() -> None:
-    """
-    Work that runs on each 14-minute tick while the server is up.
-    """
     log.info("========== CRON JOB STARTED ==========")
 
     try:
         log.info("Running periodic tasks...")
 
-        # 👉 Add your actual logic here
-        # Example:
-        # cleanup_old_data()
-        # send_notifications()
+        # 👉 Your actual logic here
 
         log.info("Tasks executed successfully ✅")
 
@@ -36,15 +30,14 @@ def run_scheduled_job() -> None:
     log.info("========== CRON JOB FINISHED ==========\n")
 
 
-async def _fourteen_minute_loop(stop: asyncio.Event) -> None:
+async def _cron_loop(stop: asyncio.Event) -> None:
     log.info(
-        "cron scheduler started | interval=%ss (14 minutes)",
+        "cron scheduler started | interval=%ss",
         CRON_INTERVAL_SECONDS,
     )
 
     while not stop.is_set():
         try:
-            log.info("Waiting for next run...")
             await asyncio.wait_for(stop.wait(), timeout=CRON_INTERVAL_SECONDS)
             break
 
@@ -55,7 +48,8 @@ async def _fourteen_minute_loop(stop: asyncio.Event) -> None:
             log.info("Triggering scheduled job now 🚀")
 
             try:
-                run_scheduled_job()
+                # ✅ FIX: run in background thread (NON-BLOCKING)
+                await asyncio.to_thread(run_scheduled_job)
             except Exception:
                 log.exception("scheduled job raised an error")
 
@@ -66,7 +60,7 @@ def start_cron_scheduler() -> tuple[asyncio.Event, asyncio.Task]:
     log.info("Starting cron scheduler...")
 
     stop = asyncio.Event()
-    task = asyncio.create_task(_fourteen_minute_loop(stop))
+    task = asyncio.create_task(_cron_loop(stop))
 
     return stop, task
 
