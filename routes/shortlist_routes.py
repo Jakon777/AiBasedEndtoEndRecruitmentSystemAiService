@@ -541,6 +541,165 @@
 
 
 
+# import json
+# import os
+# import shutil
+# import uuid
+# from pathlib import Path
+# from typing import Any, Optional
+# from concurrent.futures import ThreadPoolExecutor
+
+# from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+# from core.resume_parser import parse_resume
+# from core.shortlist_engine import evaluate_shortlist
+# from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# router = APIRouter(prefix="/shortlist", tags=["Shortlist"])
+
+# # ✅ LIMIT THREADS (important for Render free tier)
+# MAX_WORKERS = 2
+
+# UPLOAD_FOLDER = "uploads"
+# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+# # =========================
+# # ✅ JOB MODEL
+# # =========================
+# class JobPostingPayload(BaseModel):
+#     model_config = ConfigDict(extra="ignore")
+
+#     title: Optional[str] = None
+#     description: str = ""
+#     skillsRequired: list[str] = Field(default_factory=list)
+#     experienceRequired: Optional[float] = None
+#     profile: Optional[str] = None
+#     jobType: Optional[str] = None
+
+#     @model_validator(mode="before")
+#     @classmethod
+#     def clean_data(cls, data: Any) -> Any:
+#         if isinstance(data, dict):
+#             return {k: v for k, v in data.items() if not k.startswith("$")}
+#         return data
+
+
+# # =========================
+# # ✅ FILE HELPERS
+# # =========================
+# def _save_upload_temp(resume: UploadFile) -> str:
+#     suffix = Path(resume.filename or "").suffix or ".pdf"
+#     path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4().hex}{suffix}")
+
+#     with open(path, "wb") as buffer:
+#         shutil.copyfileobj(resume.file, buffer)
+
+#     return path
+
+
+# def _remove_file_quiet(path: str):
+#     try:
+#         if path and os.path.exists(path):
+#             os.remove(path)
+#     except Exception:
+#         pass
+
+
+# # =========================
+# # ✅ CORE EVALUATION
+# # =========================
+# def _evaluate_shortlist_safe(job_payload: dict, path: str):
+#     try:
+#         result = dict(evaluate_shortlist(job_payload, path))
+#         result["ok"] = True
+#         return result
+#     except Exception as e:
+#         return {
+#             "ok": False,
+#             "error": str(e),
+#             "shortlisted": False,
+#             "score": 0.0,
+#         }
+
+
+# def _process_resume(resume: UploadFile, job_payload: dict):
+#     path = ""
+#     try:
+#         path = _save_upload_temp(resume)
+#         result = _evaluate_shortlist_safe(job_payload, path)
+
+#         return {
+#             "fileName": resume.filename or "",
+#             "result": result
+#         }
+#     finally:
+#         _remove_file_quiet(path)
+
+
+# # =========================
+# # 🚀 MAIN BATCH API (USE THIS)
+# # =========================
+# @router.post("/evaluate-batch")
+# async def shortlist_batch(
+#     job: str = Form(...),
+#     resumes: list[UploadFile] = File(...)
+# ):
+#     """
+#     🚀 HIGH PERFORMANCE ENDPOINT
+#     - Parallel processing
+#     - No base64
+#     - Optimized for low CPU
+#     """
+
+#     if not resumes:
+#         raise HTTPException(status_code=400, detail="No resumes provided")
+
+#     # ✅ Parse job JSON
+#     try:
+#         raw = json.loads(job)
+#         job_model = JobPostingPayload.model_validate(raw)
+#         job_payload = job_model.model_dump()
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"Invalid job JSON: {e}")
+
+#     # ✅ Parallel execution (IMPORTANT)
+#     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+#         results = list(executor.map(lambda r: _process_resume(r, job_payload), resumes))
+
+#     return {
+#         "total": len(resumes),
+#         "results": results
+#     }
+
+
+# # =========================
+# # ✅ SINGLE API (OPTIONAL)
+# # =========================
+# @router.post("/evaluate")
+# async def shortlist_single(
+#     job: str = Form(...),
+#     resume: UploadFile = File(...)
+# ):
+#     try:
+#         raw = json.loads(job)
+#         job_model = JobPostingPayload.model_validate(raw)
+#         job_payload = job_model.model_dump()
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
+
+#     path = _save_upload_temp(resume)
+
+#     try:
+#         return _evaluate_shortlist_safe(job_payload, path)
+#     finally:
+#         _remove_file_quiet(path)
+
+
+
+
+
+
 import json
 import os
 import shutil
@@ -638,24 +797,16 @@ def _process_resume(resume: UploadFile, job_payload: dict):
 
 
 # =========================
-# 🚀 MAIN BATCH API (USE THIS)
+# 🚀 MAIN BATCH API
 # =========================
 @router.post("/evaluate-batch")
 async def shortlist_batch(
     job: str = Form(...),
     resumes: list[UploadFile] = File(...)
 ):
-    """
-    🚀 HIGH PERFORMANCE ENDPOINT
-    - Parallel processing
-    - No base64
-    - Optimized for low CPU
-    """
-
     if not resumes:
         raise HTTPException(status_code=400, detail="No resumes provided")
 
-    # ✅ Parse job JSON
     try:
         raw = json.loads(job)
         job_model = JobPostingPayload.model_validate(raw)
@@ -663,7 +814,7 @@ async def shortlist_batch(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid job JSON: {e}")
 
-    # ✅ Parallel execution (IMPORTANT)
+    # ✅ Controlled parallel execution
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         results = list(executor.map(lambda r: _process_resume(r, job_payload), resumes))
 
@@ -674,7 +825,7 @@ async def shortlist_batch(
 
 
 # =========================
-# ✅ SINGLE API (OPTIONAL)
+# ✅ SINGLE API
 # =========================
 @router.post("/evaluate")
 async def shortlist_single(

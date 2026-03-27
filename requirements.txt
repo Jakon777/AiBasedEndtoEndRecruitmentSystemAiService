@@ -5,8 +5,13 @@ pdfplumber==0.10.3
 requests==2.31.0
 pydantic==2.12.5
 python-dotenv==1.0.1
-google-generativeai==0.8.6
-# embedding_engine / job_manager
-numpy>=1.26.4,<2.3.0
+
+# ✅ NEW Gemini SDK (replace deprecated one)
+google-genai==0.3.0
+
+# ML / Embeddings (optimized for free tier)
+numpy>=1.26.4,<2.0.0
 scikit-learn==1.6.1
-sentence-transformers==3.4.1
+
+# ⚠️ Use lighter + stable version
+sentence-transformers==2.7.0
