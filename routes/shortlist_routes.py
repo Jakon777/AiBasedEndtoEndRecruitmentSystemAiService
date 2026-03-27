@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import uuid
+import base64
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,6 +37,31 @@ class JobPostingPayload(BaseModel):
         return data
 
 
+class BatchShortlistEvaluateItem(BaseModel):
+    """
+    JSON item for /shortlist/evaluate/batch.
+
+    Resume content must be base64-encoded PDF bytes. Any provided ids are echoed back.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    candidateId: Optional[str] = None
+    jobPostingId: Optional[str] = None
+    jobApplicationId: Optional[str] = None
+    resumeId: Optional[str] = None
+
+    job: dict[str, Any] | str
+    resumeBase64: str = Field(..., min_length=1, description="Base64-encoded PDF bytes")
+    resumeFileName: Optional[str] = Field(default="resume.pdf", description="Optional filename hint")
+
+
+class BatchShortlistEvaluateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[BatchShortlistEvaluateItem] = Field(default_factory=list)
+
+
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -47,6 +73,16 @@ def _save_upload_temp(resume: UploadFile) -> str:
     path = os.path.join(UPLOAD_FOLDER, safe_name)
     with open(path, "wb") as buffer:
         shutil.copyfileobj(resume.file, buffer)
+    return path
+
+
+def _save_bytes_temp(data: bytes, filename_hint: str = "resume.pdf") -> str:
+    """Write bytes to a temp file; caller must delete the path when done."""
+    suffix = Path(filename_hint or "").suffix or ".pdf"
+    safe_name = f"{uuid.uuid4().hex}{suffix}"
+    path = os.path.join(UPLOAD_FOLDER, safe_name)
+    with open(path, "wb") as buffer:
+        buffer.write(data)
     return path
 
 
@@ -293,6 +329,95 @@ async def ats_score_batch(
         "failed": failed,
         "results": results,
     }
+
+
+@router.post("/evaluate/batch")
+async def shortlist_evaluate_batch_json(payload: BatchShortlistEvaluateRequest):
+    """
+    JSON batch endpoint for clients that POST application/json to:
+      /shortlist/evaluate/batch
+
+    Response is a flat list in the same order as `payload.items`.
+    """
+    if payload is None or not payload.items:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for item in payload.items:
+        path = ""
+        try:
+            raw_job: dict[str, Any]
+            if isinstance(item.job, str):
+                try:
+                    decoded = json.loads(item.job)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Invalid job JSON string: {e}") from e
+                if not isinstance(decoded, dict):
+                    raise ValueError("job JSON string must decode to an object")
+                raw_job = decoded
+            elif isinstance(item.job, dict):
+                raw_job = item.job
+            else:
+                raise ValueError("job must be a JSON object or JSON string")
+
+            job_model = JobPostingPayload.model_validate(raw_job)
+            job_payload = job_model.model_dump()
+
+            b64 = (item.resumeBase64 or "").strip()
+            try:
+                pdf_bytes = base64.b64decode(b64, validate=True)
+            except Exception as e:
+                raise ValueError(f"Invalid resumeBase64: {e}") from e
+
+            if not pdf_bytes:
+                raise ValueError("resumeBase64 decoded to empty bytes")
+
+            path = _save_bytes_temp(pdf_bytes, item.resumeFileName or "resume.pdf")
+            result = _evaluate_shortlist_safe(job_payload, path)
+
+            out.append(
+                {
+                    "candidateId": item.candidateId,
+                    "jobPostingId": item.jobPostingId,
+                    "jobApplicationId": item.jobApplicationId,
+                    "resumeId": item.resumeId,
+                    **result,
+                }
+            )
+        except Exception as e:
+            required: list[str] = []
+            if isinstance(item.job, dict):
+                required = [str(s) for s in (item.job.get("skillsRequired") or [])]
+            elif isinstance(item.job, str):
+                try:
+                    parsed = json.loads(item.job)
+                    if isinstance(parsed, dict):
+                        required = [str(s) for s in (parsed.get("skillsRequired") or [])]
+                except Exception:
+                    pass
+
+            out.append(
+                {
+                    "candidateId": item.candidateId,
+                    "jobPostingId": item.jobPostingId,
+                    "jobApplicationId": item.jobApplicationId,
+                    "resumeId": item.resumeId,
+                    "ok": False,
+                    "error": str(e),
+                    "shortlisted": False,
+                    "score": 0.0,
+                    "similarity": 0.0,
+                    "skillsMatchRatio": 0.0,
+                    "matchedSkills": [],
+                    "missingSkills": required,
+                    "candidateName": "",
+                    "reason": f"Evaluation failed: {e}",
+                }
+            )
+        finally:
+            _remove_file_quiet(path)
+
+    return out
 
 
 @router.post("/evaluate")
