@@ -133,8 +133,8 @@ client = genai.Client(api_key=API_KEY)
 
 # Model fallback list (safe + stable)
 _DEFAULT_MODEL_FALLBACKS: tuple[str, ...] = (
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
     "gemini-2.0-flash",
 )
 
