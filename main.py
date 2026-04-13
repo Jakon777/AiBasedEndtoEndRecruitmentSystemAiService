@@ -13,6 +13,8 @@ from routes.test_routes import router as test_router
 from routes.evaluation_routes import router as evaluation_router
 from routes.scoring_routes import router as scoring_router
 from routes.shortlist_routes import router as shortlist_router
+# ✅ NEW: Interview routes
+from routes.interview_routes import router as interview_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +53,8 @@ app.include_router(test_router)
 app.include_router(evaluation_router)
 app.include_router(scoring_router)
 app.include_router(shortlist_router)
+# ✅ NEW: Interview Route
+app.include_router(interview_router)
 
 
 @app.get("/")
