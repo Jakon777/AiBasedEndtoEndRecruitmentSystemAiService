@@ -151,6 +151,9 @@
 
 import pdfplumber
 import re
+from core.logging_config import get_logger
+
+log = get_logger("ai_hr.core.ResumeParser")
 
 
 def extract_text_from_pdf(path: str, max_chars: int = 12000) -> str:
@@ -162,6 +165,7 @@ def extract_text_from_pdf(path: str, max_chars: int = 12000) -> str:
     """
     chunks: list[str] = []
     total = 0
+    log.info("Extracting text from PDF resume: %s (max_chars=%d)", path, max_chars)
 
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -329,11 +333,14 @@ def parse_resume(
     similarity_chars: int = 4000,
 ):
     text = extract_text_from_pdf(path, max_chars=max_chars)
+    log.info("PDF text extraction finished: totalChars=%d", len(text))
 
     name = extract_name(text)
     emails = extract_email(text)
     skills = extract_skills(text)
     phone = extract_phone(text)
+
+    log.info("Resume parsed: name='%s' | email=%s | phone=%s | skillsCount=%d", name, emails, phone, len(skills))
 
     out: dict[str, object] = {
         "name": name,

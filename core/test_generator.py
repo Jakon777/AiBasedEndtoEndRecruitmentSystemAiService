@@ -1,7 +1,11 @@
 import json
 from core.llm_client import generate_text
+from core.logging_config import get_logger
+
+log = get_logger("ai_hr.core.TestGenerator")
 
 def _local_mcq_fallback(skills, difficulty="Intermediate"):
+    log.warning("Activating deterministic fallback MCQ generator for skills=%s, difficulty=%s", skills, difficulty)
     skill_list = [str(s).strip() for s in (skills or []) if str(s).strip()]
     if not skill_list:
         skill_list = ["General Programming"]
@@ -22,10 +26,12 @@ def _local_mcq_fallback(skills, difficulty="Intermediate"):
             }
         )
 
+    log.info("Generated %d fallback MCQs successfully", len(mcqs))
     return {"mcqs": mcqs}
 
 
 def generate_test(skills, job_desc, difficulty="Intermediate"):
+    log.info("Invoking Gemini LLM for MCQ test generation (target: 30 questions, difficulty='%s')", difficulty)
     prompt = f"""
 You are an AI technical interview generator.
 
@@ -80,7 +86,9 @@ Requirements:
         end = raw.rfind("}")
         if start == -1 or end == -1 or end <= start:
             raise ValueError("Model did not return JSON object content")
-        return json.loads(raw[start:end + 1])
-    except Exception:
-        # Keep API stable even if LLM is unavailable/quota-exhausted.
+        data = json.loads(raw[start:end + 1])
+        log.info("Gemini successfully generated %d test MCQs", len(data.get("mcqs", [])))
+        return data
+    except Exception as e:
+        log.warn("Gemini generation failed: %s. Falling back to local test generator.", e)
         return _local_mcq_fallback(skills, difficulty)

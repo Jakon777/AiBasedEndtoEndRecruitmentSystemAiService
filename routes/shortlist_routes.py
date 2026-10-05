@@ -701,8 +701,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from core.resume_parser import parse_resume
 from core.shortlist_engine import evaluate_shortlist
+from core.logging_config import get_logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+log = get_logger("ai_hr.routes.ShortlistController")
 router = APIRouter(prefix="/shortlist", tags=["Shortlist"])
 
 # ✅ LIMIT THREADS (important for Render free tier)
@@ -710,6 +712,7 @@ MAX_WORKERS = 2
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 
 # =========================
@@ -887,12 +890,13 @@ def _ats_for_path(path: str) -> dict[str, Any]:
 # =========================
 # ✅ CORE EVALUATION
 # =========================
-def _evaluate_shortlist_safe(job_payload: dict, path: str):
+def _evaluate_shortlist_safe(job_payload: dict, path: str, filename: str = ""):
     try:
         result = dict(evaluate_shortlist(job_payload, path))
         result["ok"] = True
         return result
     except Exception as e:
+        log.error("Shortlist evaluation failed for resume='%s': %s", filename or path, e, exc_info=True)
         return {
             "ok": False,
             "error": str(e),
@@ -903,12 +907,13 @@ def _evaluate_shortlist_safe(job_payload: dict, path: str):
 
 def _process_resume(resume: UploadFile, job_payload: dict):
     path = ""
+    filename = resume.filename or "unknown.pdf"
     try:
         path = _save_upload_temp(resume)
-        result = _evaluate_shortlist_safe(job_payload, path)
-
+        log.info("Processing resume in worker pool: file='%s'", filename)
+        result = _evaluate_shortlist_safe(job_payload, path, filename=filename)
         return {
-            "fileName": resume.filename or "",
+            "fileName": filename,
             "result": result
         }
     finally:
@@ -924,19 +929,25 @@ async def shortlist_batch(
     resumes: list[UploadFile] = File(...)
 ):
     if not resumes:
+        log.warning("Batch shortlist evaluation rejected: No resumes provided.")
         raise HTTPException(status_code=400, detail="No resumes provided")
 
+    log.info("Received batch shortlist evaluation request | totalResumes=%d", len(resumes))
     try:
         raw = json.loads(job)
         job_model = JobPostingPayload.model_validate(raw)
         job_payload = job_model.model_dump()
+        log.info("Parsed batch job target: title='%s', requiredSkills=%s", job_payload.get("title"), job_payload.get("skillsRequired"))
     except Exception as e:
+        log.error("Invalid job JSON provided to evaluate-batch: %s", e)
         raise HTTPException(status_code=400, detail=f"Invalid job JSON: {e}")
 
     # ✅ Controlled parallel execution
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         results = list(executor.map(lambda r: _process_resume(r, job_payload), resumes))
 
+    shortlisted_count = sum(1 for r in results if r.get("result", {}).get("shortlisted"))
+    log.info("Batch evaluation completed: total=%d, shortlisted=%d", len(resumes), shortlisted_count)
     return {
         "total": len(resumes),
         "results": results
@@ -951,17 +962,29 @@ async def shortlist_single(
     job: str = Form(...),
     resume: UploadFile = File(...)
 ):
+    filename = resume.filename or "unknown.pdf"
+    log.info("Received single shortlist evaluation request | file='%s'", filename)
     try:
         raw = json.loads(job)
         job_model = JobPostingPayload.model_validate(raw)
         job_payload = job_model.model_dump()
+        log.info("Parsed job posting: title='%s', requiredSkills=%s", job_payload.get("title"), job_payload.get("skillsRequired"))
     except Exception as e:
+        log.error("Invalid job JSON in evaluate request: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
     path = _save_upload_temp(resume)
 
     try:
-        return _evaluate_shortlist_safe(job_payload, path)
+        result = _evaluate_shortlist_safe(job_payload, path, filename=filename)
+        log.info(
+            "Shortlist evaluation completed: file='%s' | candidate='%s' | score=%.2f | shortlisted=%s",
+            filename,
+            result.get("candidateName", "N/A"),
+            result.get("score", 0.0),
+            result.get("shortlisted", False),
+        )
+        return result
     finally:
         _remove_file_quiet(path)
 
@@ -971,8 +994,12 @@ async def ats_score(resume: UploadFile = File(..., description="Candidate resume
     Upload a resume and return an ATS-like integer score.
     Always returns 200; check `ok` for per-file success (parsing errors do not raise).
     """
+    filename = resume.filename or "unknown.pdf"
+    log.info("Received ATS score calculation request | file='%s'", filename)
     path = _save_upload_temp(resume)
     try:
-        return _ats_for_path(path)
+        result = _ats_for_path(path)
+        log.info("ATS score calculated for file='%s': score=%s, ok=%s", filename, result.get("atsScore"), result.get("ok"))
+        return result
     finally:
         _remove_file_quiet(path)

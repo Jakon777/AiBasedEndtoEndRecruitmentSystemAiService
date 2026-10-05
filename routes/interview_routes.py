@@ -6,9 +6,12 @@ from pydantic import BaseModel
 
 from core.interview_engine import process_answer, start_interview
 from core.resume_parser import parse_resume
+from core.logging_config import get_logger
 from routes.shortlist_routes import _remove_file_quiet, _save_upload_temp
 
+log = get_logger("ai_hr.routes.InterviewController")
 router = APIRouter(prefix="/interview", tags=["Interview"])
+
 
 
 class AnswerRequest(BaseModel):
@@ -36,9 +39,12 @@ async def start(
 
     Returns one first `question` and a `session_id` for `POST /interview/answer`.
     """
+    filename = resume.filename or "unknown.pdf"
+    log.info("Starting AI interview for candidateId='%s' | file='%s'", candidate_id, filename)
     try:
         raw = json.loads(job)
     except json.JSONDecodeError as e:
+        log.error("Invalid job JSON for interview start: %s", e)
         raise HTTPException(status_code=400, detail=f"Invalid job JSON: {e}") from e
 
     if not isinstance(raw, dict):
@@ -50,6 +56,7 @@ async def start(
     try:
         parsed = parse_resume(path, include_full_text=True)
     except Exception as e:
+        log.error("Could not read resume PDF for candidateId='%s': %s", candidate_id, e)
         raise HTTPException(
             status_code=422,
             detail=f"Could not read resume PDF: {e}",
@@ -59,6 +66,7 @@ async def start(
 
     text = str(parsed.get("full_text") or parsed.get("text_for_similarity") or "").strip()
     if not text:
+        log.warn("Empty resume text for candidateId='%s'", candidate_id)
         raise HTTPException(
             status_code=422,
             detail="No text could be extracted from the resume PDF.",
@@ -72,6 +80,7 @@ async def start(
         job_application_id=job_application_id,
         resume_id=resume_id,
     )
+    log.info("AI interview session started: sessionId='%s' | candidateId='%s'", session_id, candidate_id)
 
     return {
         "session_id": session_id,
@@ -85,4 +94,8 @@ async def start(
 
 @router.post("/answer")
 def answer(req: AnswerRequest):
-    return process_answer(req.session_id, req.answer)
+    log.info("Interview answer received for sessionId='%s' | answerLength=%d", req.session_id, len(req.answer))
+    result = process_answer(req.session_id, req.answer)
+    is_completed = result.get("completed", False)
+    log.info("Processed answer for sessionId='%s' -> completed=%s", req.session_id, is_completed)
+    return result

@@ -16,12 +16,10 @@ from routes.shortlist_routes import router as shortlist_router
 # ✅ NEW: Interview routes
 from routes.interview_routes import router as interview_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("ai_hr.main")
+from core.logging_config import setup_spring_boot_logging, get_logger
+
+setup_spring_boot_logging()
+log = get_logger("ai_hr.main")
 
 _cron_stop: Optional[asyncio.Event] = None
 _cron_task: Optional[asyncio.Task] = None

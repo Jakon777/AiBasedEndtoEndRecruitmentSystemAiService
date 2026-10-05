@@ -50,7 +50,15 @@ def _build_job_description(job: JobPostingTestRequest) -> str:
     return "\n\n".join(parts) if parts else job.description
 
 
+from core.logging_config import get_logger
+
+log = get_logger("ai_hr.routes.TestController")
+
 @router.post("/generate")
 def generate(req: JobPostingTestRequest):
+    log.info("Test generation requested: title='%s', skills=%s, difficulty='%s'", req.title, req.skillsRequired, req.difficulty)
     job_desc = _build_job_description(req)
-    return generate_test(req.skillsRequired, job_desc, req.difficulty)
+    result = generate_test(req.skillsRequired, job_desc, req.difficulty)
+    mcq_count = len(result.get("mcqs", []))
+    log.info("Test generation completed: totalMcqs=%d for title='%s'", mcq_count, req.title)
+    return result

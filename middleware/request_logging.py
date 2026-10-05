@@ -1,14 +1,15 @@
-import logging
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-log = logging.getLogger("ai_hr.api")
+from core.logging_config import get_logger
+
+log = get_logger("ai_hr.web.DispatcherServlet")
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Logs method, path, status, and duration for every HTTP request."""
+    """Logs method, path, status, and duration for every HTTP request similar to Spring MVC."""
 
     async def dispatch(self, request: Request, call_next):
         start = time.perf_counter()
@@ -16,26 +17,37 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         method = request.method
         client = request.client.host if request.client else "-"
 
+        # Filter out spammy health check keep-alives unless at DEBUG level
+        is_keepalive = path in ("/", "/health")
+        if not is_keepalive:
+            log.info("Incoming HTTP request: %s \"%s\" from client=%s", method, path, client)
+
         try:
             response = await call_next(request)
-        except Exception:
+        except Exception as ex:
             duration_ms = (time.perf_counter() - start) * 1000
-            log.exception(
-                "request failed | %s %s | client=%s | %.2fms",
+            log.error(
+                "Request processing failed: %s \"%s\" from %s in %.2f ms | error=%s",
                 method,
                 path,
                 client,
                 duration_ms,
+                ex,
+                exc_info=True,
             )
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        log.info(
-            "%s %s -> %s | client=%s | %.2fms",
-            method,
-            path,
-            response.status_code,
-            client,
-            duration_ms,
-        )
+        status = response.status_code
+        if is_keepalive:
+            log.debug("Keep-alive ping %s -> %s in %.2f ms", path, status, duration_ms)
+        else:
+            log.info(
+                "Completed %s \"%s\" -> status=%s in %.2f ms",
+                method,
+                path,
+                status,
+                duration_ms,
+            )
         return response
+

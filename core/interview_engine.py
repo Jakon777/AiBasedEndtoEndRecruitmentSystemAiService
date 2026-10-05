@@ -3,9 +3,13 @@ import json
 from typing import Any
 
 from core.llm_client import generate_text
+from core.logging_config import get_logger
+
+log = get_logger("ai_hr.core.InterviewEngine")
 
 # In-memory sessions
 sessions: dict[str, Any] = {}
+
 
 _SINGLE_QUESTION_RULES = """
 Rules:
@@ -115,6 +119,8 @@ def start_interview(
     job_application_id: str | None = None,
     resume_id: str | None = None,
 ) -> tuple[str, str]:
+    job_title = job.get("title") or "Untitled Role"
+    log.info("Starting AI interview session for candidateId='%s', job='%s'", candidate_id, job_title)
     session_id = str(uuid.uuid4())
 
     resume_context = _format_resume_context(resume_parsed)
@@ -125,6 +131,7 @@ def start_interview(
         "Remember: exactly one question, no lists of multiple questions."
     )
     first_question = generate_text(system_prompt + "\n" + opener)
+    log.info("Generated initial interview question for sessionId='%s': \"%s...\"", session_id, first_question.strip()[:80])
 
     sessions[session_id] = {
         "candidate_id": candidate_id,
@@ -170,8 +177,11 @@ Return STRICT JSON only:
         start = raw.find("{")
         end = raw.rfind("}")
         data = json.loads(raw[start:end+1])
+        log.info("LLM evaluated answer: score=%s/10 | tech=%s | comm=%s | rel=%s",
+                 data.get("score"), data.get("technical_accuracy"), data.get("communication"), data.get("relevance"))
         return data
-    except:
+    except Exception as e:
+        log.warn("Failed to parse LLM evaluation response: %s. Using default score.", e)
         return {
             "score": 5,
             "technical_accuracy": 5,
@@ -208,12 +218,15 @@ def process_answer(session_id: str, answer: str):
     session = sessions.get(session_id)
 
     if not session:
+        log.warn("Interview session not found for sessionId='%s'", session_id)
         return {"error": "Invalid session"}
 
     history = session["history"]
 
     # Last question asked
     last_question = history[-1]["content"]
+    turn_idx = len(session["scores"]) + 1
+    log.info("Evaluating turn %d for sessionId='%s'", turn_idx, session_id)
 
     # Evaluate answer
     evaluation = evaluate_answer_llm(last_question, answer)
@@ -226,6 +239,13 @@ def process_answer(session_id: str, answer: str):
     if len(session["scores"]) >= 6:
         avg_score = sum(session["scores"]) / len(session["scores"])
         result = "Selected" if avg_score >= 6 else "Rejected"
+        log.info(
+            "AI interview completed for sessionId='%s': avgScore=%.2f/10, result='%s', allScores=%s",
+            session_id,
+            avg_score,
+            result,
+            session["scores"],
+        )
 
         return {
             "message": "Interview completed",
@@ -236,6 +256,7 @@ def process_answer(session_id: str, answer: str):
 
     # Generate next question
     next_q = generate_next_question(history)
+    log.info("Generated next question for sessionId='%s' (turn %d): \"%s...\"", session_id, turn_idx + 1, next_q.strip()[:80])
 
     history.append({"role": "assistant", "content": next_q})
 

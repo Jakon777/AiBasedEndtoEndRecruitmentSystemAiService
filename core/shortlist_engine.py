@@ -2,6 +2,9 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from core.embedding_engine import compute_similarity
+from core.logging_config import get_logger
+
+log = get_logger("ai_hr.core.ShortlistEngine")
 
 # Weight semantic fit vs explicit skill overlap (0–1 each, then scaled to score 0–100)
 _SIMILARITY_WEIGHT = 0.5
@@ -68,19 +71,19 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
     """
     from core.resume_parser import parse_resume
 
-    # Don't keep the full (potentially huge) resume text in memory.
-    # We only need a bounded slice for embeddings.
+    log.info("Starting candidate evaluation pipeline for file='%s'", resume_path)
     parsed = parse_resume(resume_path, include_full_text=False)
-    resume_text = (parsed.get("text_for_similarity") or parsed.get("text_preview") or "").strip()
+    candidate_name = parsed.get("name") or "Unknown"
     candidate_skills: List[str] = list(parsed.get("skills") or [])
+    resume_text = (parsed.get("text_for_similarity") or parsed.get("text_preview") or "").strip()
 
-    job_text = build_job_text(job).strip()
-    # Cap job text too; embedding tokenization can otherwise spike memory for
-    # very large descriptions.
-    job_text = job_text[:4000] if job_text else job_text
+    job_title = job.get("title") or "Untitled Position"
     required = [str(s) for s in (job.get("skillsRequired") or [])]
+    log.info("Candidate profile parsed: name='%s' | detectedSkills=%s", candidate_name, candidate_skills)
+    log.info("Target job requirements: title='%s' | requiredSkills=%s", job_title, required)
 
     if not resume_text:
+        log.warning("No readable text found in resume PDF '%s'. Auto-rejecting.", resume_path)
         return {
             "shortlisted": False,
             "score": 0.0,
@@ -88,15 +91,25 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
             "skillsMatchRatio": 0.0,
             "matchedSkills": [],
             "missingSkills": required,
-            "candidateName": parsed.get("name") or "",
+            "candidateName": candidate_name,
             "reason": "No text could be extracted from the resume PDF.",
         }
 
+    job_text = build_job_text(job).strip()
+    job_text = job_text[:4000] if job_text else job_text
+
+    log.info("Computing semantic vector similarity using GenAI embeddings...")
     sim_raw = compute_similarity(job_text, resume_text) if job_text else 0.0
     similarity = max(0.0, min(1.0, float(sim_raw)))
 
     skill_ratio, matched_skills, missing_skills = _skills_overlap(
         required, candidate_skills
+    )
+    log.info(
+        "Skills matching result: matched=%s, missing=%s (overlapRatio=%.2f)",
+        matched_skills,
+        missing_skills,
+        skill_ratio,
     )
 
     if not required:
@@ -108,6 +121,15 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
 
     shortlisted = combined_100 >= _SHORTLIST_THRESHOLD
 
+    log.info(
+        "Evaluation score: combined=%.2f/100 (similarity=%.2f, skillRatio=%.2f, threshold=%.2f) -> shortlisted=%s",
+        combined_100,
+        similarity,
+        skill_ratio,
+        _SHORTLIST_THRESHOLD,
+        shortlisted,
+    )
+
     return {
         "shortlisted": shortlisted,
         "score": round(combined_100, 2),
@@ -115,6 +137,7 @@ def evaluate_shortlist(job: Dict[str, Any], resume_path: str) -> Dict[str, Any]:
         "skillsMatchRatio": round(skill_ratio, 4),
         "matchedSkills": matched_skills,
         "missingSkills": missing_skills,
-        "candidateName": parsed.get("name") or "",
+        "candidateName": candidate_name,
     }
+
  

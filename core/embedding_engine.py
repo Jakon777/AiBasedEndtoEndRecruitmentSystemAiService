@@ -10,7 +10,10 @@ import numpy as np
 # Load environment variables
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-logger = logging.getLogger("ai_hr.embedding")
+from core.logging_config import get_logger
+
+logger = get_logger("ai_hr.core.EmbeddingEngine")
+
 
 # Lazy-loaded client singleton
 _client = None
