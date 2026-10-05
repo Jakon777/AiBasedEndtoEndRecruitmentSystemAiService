@@ -1,4 +1,4 @@
-fastapi==0.110.0
+fastapi>=0.115.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 pdfplumber==0.10.3
@@ -6,12 +6,9 @@ requests==2.31.0
 pydantic==2.12.5
 python-dotenv==1.0.1
 
-# ✅ NEW Gemini SDK (replace deprecated one)
+# ✅ Gemini SDK (LLM generation + Embeddings)
 google-genai==0.3.0
 
-# ML / Embeddings (optimized for free tier)
+# Lightweight math / similarity calculation (no PyTorch required)
 numpy>=1.26.4,<2.0.0
 scikit-learn==1.6.1
-
-# ⚠️ Use lighter + stable version
-sentence-transformers==2.7.0

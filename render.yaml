@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-hr-services
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: bash start.sh
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CRON_INTERVAL_SECONDS
+        value: 840
