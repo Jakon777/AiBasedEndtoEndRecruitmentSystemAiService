@@ -118,18 +118,22 @@ from google.genai.errors import APIError
 # Load .env file
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-# =========================
-# ✅ CONFIG
-# =========================
-API_KEY = os.getenv("GEMINI_API_KEY")
+_client: Optional[genai.Client] = None
 
-if not API_KEY:
-    raise RuntimeError(
-        "GEMINI_API_KEY is not set. Add it to your .env file."
-    )
 
-# ✅ Create client (NEW SDK)
-client = genai.Client(api_key=API_KEY)
+def _get_client() -> genai.Client:
+    global _client
+    if _client is not None:
+        return _client
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Add it to your .env file or environment variables."
+        )
+
+    _client = genai.Client(api_key=api_key)
+    return _client
 
 # Model fallback list (safe + stable)
 _DEFAULT_MODEL_FALLBACKS: tuple[str, ...] = (
@@ -173,6 +177,7 @@ def generate_text(prompt: str) -> str:
     """
     global _last_ok_model
 
+    client = _get_client()
     last_error: Optional[Exception] = None
     candidates = _model_candidates()
 
