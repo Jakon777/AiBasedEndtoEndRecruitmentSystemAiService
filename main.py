@@ -63,3 +63,9 @@ def root():
         "message": "AI Hiring Service Running",
         "docs": "/docs",
     }
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "ai-hr-services"}
+
